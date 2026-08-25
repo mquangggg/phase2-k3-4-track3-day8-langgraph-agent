@@ -1,66 +1,210 @@
-"""Graph smoke tests.
-
-These tests verify end-to-end graph execution. They will fail with NotImplementedError
-until you implement nodes, routing, and graph wiring.
-
-Note: These tests require a configured LLM (OPENAI_API_KEY or ANTHROPIC_API_KEY)
-because classify_node and answer_node use real LLM calls.
-"""
-
-import importlib.util
-import os
-
-import pytest
-
-pytestmark = [
-    pytest.mark.skipif(
-        importlib.util.find_spec("langgraph") is None,
-        reason="langgraph not installed",
-    ),
-    pytest.mark.skipif(
-        not os.getenv("GEMINI_API_KEY") and not os.getenv("OPENAI_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"),
-        reason="No LLM API key configured (set GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)",
-    ),
-]
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 from langgraph_agent_lab.graph import build_graph
-from langgraph_agent_lab.persistence import build_checkpointer
-from langgraph_agent_lab.state import Route, Scenario, initial_state
+from langgraph_agent_lab.state import AgentState, Route, Scenario, initial_state
 
 
-@pytest.mark.parametrize(
-    ("query", "expected_route"),
-    [
-        ("How do I reset my password?", Route.SIMPLE.value),
-        ("Please lookup order status for order 123", Route.TOOL.value),
-        ("Refund this customer", Route.RISKY.value),
-        ("Can you fix it?", Route.MISSING_INFO.value),
-        ("Timeout failure while processing", Route.ERROR.value),
-    ],
-)
-def test_graph_runs_and_routes_correctly(query, expected_route):
-    graph = build_graph(checkpointer=build_checkpointer("memory"))
-    scenario = Scenario(id="smoke", query=query, expected_route=Route(expected_route))
+def test_graph_node_registration() -> None:
+    """Verify that graph registers all 11 business nodes."""
+    graph = build_graph()
+    expected_nodes = {
+        "intake",
+        "classify",
+        "answer",
+        "tool",
+        "evaluate",
+        "clarify",
+        "risky_action",
+        "approval",
+        "retry",
+        "dead_letter",
+        "finalize",
+    }
+    graph_nodes = set(graph.get_graph().nodes.keys())
+    for node in expected_nodes:
+        assert node in graph_nodes, f"Missing node {node} in graph"
+
+
+def test_graph_path_simple() -> None:
+    scenario = Scenario(
+        id="test_simple",
+        query="How do I reset password?",
+        expected_route=Route.SIMPLE,
+    )
     state = initial_state(scenario)
-    result = graph.invoke(state, config={"configurable": {"thread_id": state["thread_id"]}})
-    assert result["route"] == expected_route
-    assert result.get("final_answer") or result.get("pending_question")
+
+    with patch("langgraph_agent_lab.graph.classify_node") as mock_classify:
+        mock_classify.side_effect = lambda s: {
+            "route": "simple",
+            "events": [{"node": "classify", "event_type": "done", "message": "simple"}],
+        }
+        graph = build_graph()
+        result = graph.invoke(state, config={"configurable": {"thread_id": "t1"}})
+        mock_classify.assert_called()
+
+    events = [e.get("node") for e in result.get("events", [])]
+    assert "intake" in events
+    assert "classify" in events
+    assert "answer" in events
+    assert "finalize" in events
+    assert "tool" not in events
+    assert result["status"] == "completed"
+    assert result["attempt"] == 0
 
 
-def test_graph_terminates_all_routes():
-    """Verify every route reaches finalize node."""
-    graph = build_graph(checkpointer=build_checkpointer("memory"))
-    queries = [
-        ("simple query about help", Route.SIMPLE),
-        ("lookup order status 999", Route.TOOL),
-        ("fix it", Route.MISSING_INFO),
-        ("delete user account now", Route.RISKY),
-        ("timeout error in system", Route.ERROR),
-    ]
-    for query, route in queries:
-        scenario = Scenario(id=f"term-{route.value}", query=query, expected_route=route)
-        state = initial_state(scenario)
-        result = graph.invoke(state, config={"configurable": {"thread_id": state["thread_id"]}})
-        events = result.get("events", [])
-        finalize_events = [e for e in events if e.get("node") == "finalize"]
-        assert finalize_events, f"Route {route.value} did not reach finalize node"
+def test_graph_path_missing_info() -> None:
+    scenario = Scenario(id="test_missing", query="Help", expected_route=Route.MISSING_INFO)
+    state = initial_state(scenario)
+
+    with patch("langgraph_agent_lab.graph.classify_node") as mock_classify:
+        mock_classify.side_effect = lambda s: {
+            "route": "missing_info",
+            "events": [{"node": "classify", "event_type": "done", "message": "missing_info"}],
+        }
+        graph = build_graph()
+        result = graph.invoke(state, config={"configurable": {"thread_id": "t2"}})
+        mock_classify.assert_called()
+
+    events = [e.get("node") for e in result.get("events", [])]
+    assert "clarify" in events
+    assert "finalize" in events
+    assert "tool" not in events
+    assert result["status"] == "clarification_required"
+
+
+def test_graph_path_tool_success() -> None:
+    scenario = Scenario(id="test_tool", query="Lookup order 123", expected_route=Route.TOOL)
+    state = initial_state(scenario)
+
+    with patch("langgraph_agent_lab.graph.classify_node") as mock_classify:
+        mock_classify.side_effect = lambda s: {
+            "route": "tool",
+            "events": [{"node": "classify", "event_type": "done", "message": "tool"}],
+        }
+        graph = build_graph()
+        result = graph.invoke(state, config={"configurable": {"thread_id": "t3"}})
+        mock_classify.assert_called()
+
+    events = [e.get("node") for e in result.get("events", [])]
+    assert "tool" in events
+    assert "evaluate" in events
+    assert "answer" in events
+    assert "finalize" in events
+    assert result["attempt"] == 1
+
+
+def test_graph_path_transient_failure_and_retry() -> None:
+    scenario = Scenario(id="test_transient", query="Timeout failure", expected_route=Route.ERROR)
+    state = initial_state(scenario)
+
+    with patch("langgraph_agent_lab.graph.classify_node") as mock_classify:
+        mock_classify.side_effect = lambda s: {
+            "route": "error",
+            "events": [{"node": "classify", "event_type": "done", "message": "error"}],
+        }
+        graph = build_graph()
+        result = graph.invoke(state, config={"configurable": {"thread_id": "t4"}})
+        mock_classify.assert_called()
+
+    events = [e.get("node") for e in result.get("events", [])]
+    assert "retry" in events
+    assert result["attempt"] == 2
+    assert result["status"] == "completed"
+
+
+def test_graph_bounded_retry_exhaustion_dead_letter() -> None:
+    """Verify retry loop is bounded and terminates at dead_letter without 4th attempt."""
+    scenario = Scenario(
+        id="test_dl",
+        query="Permanent error",
+        expected_route=Route.ERROR,
+        max_attempts=3,
+    )
+    state = initial_state(scenario)
+
+    call_count = 0
+
+    def failing_tool(s: AgentState) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        curr = s.get("attempt", 0) + 1
+        return {
+            "attempt": curr,
+            "tool_results": [{"status": "error", "message": "Database permanently down"}],
+            "events": [{"node": "tool", "event_type": "fail", "message": f"attempt {curr}"}],
+        }
+
+    with (
+        patch("langgraph_agent_lab.graph.classify_node") as mock_classify,
+        patch("langgraph_agent_lab.graph.tool_node", side_effect=failing_tool),
+    ):
+        mock_classify.side_effect = lambda s: {
+            "route": "error",
+            "events": [{"node": "classify", "event_type": "done", "message": "error"}],
+        }
+        graph = build_graph()
+        result = graph.invoke(state, config={"configurable": {"thread_id": "t5"}})
+        mock_classify.assert_called()
+
+    events = [e.get("node") for e in result.get("events", [])]
+    assert "dead_letter" in events
+    assert "finalize" in events
+    assert result["attempt"] == 3
+    assert result["status"] == "dead_letter"
+    assert call_count == 3
+
+
+def test_graph_path_risky_approved() -> None:
+    scenario = Scenario(id="test_risky", query="Refund $100", expected_route=Route.RISKY)
+    state = initial_state(scenario)
+
+    with patch("langgraph_agent_lab.graph.classify_node") as mock_classify:
+        mock_classify.side_effect = lambda s: {
+            "route": "risky",
+            "risk_level": "high",
+            "events": [{"node": "classify", "event_type": "done", "message": "risky"}],
+        }
+        graph = build_graph()
+        result = graph.invoke(state, config={"configurable": {"thread_id": "t6"}})
+        mock_classify.assert_called()
+
+    events = [e.get("node") for e in result.get("events", [])]
+    assert "risky_action" in events
+    assert "approval" in events
+    assert "tool" in events
+    assert result["attempt"] == 1
+
+
+def test_graph_path_risky_rejected() -> None:
+    scenario = Scenario(id="test_rejected", query="Delete database", expected_route=Route.RISKY)
+    state = initial_state(scenario)
+
+    mock_approval = MagicMock()
+    mock_approval.side_effect = lambda s: {
+        "approval": {"approved": False, "comment": "Action rejected"},
+        "events": [{"node": "approval", "event_type": "reject", "message": "rejected"}],
+    }
+
+    with (
+        patch("langgraph_agent_lab.graph.classify_node") as mock_classify,
+        patch("langgraph_agent_lab.graph.approval_node", mock_approval),
+    ):
+        mock_classify.side_effect = lambda s: {
+            "route": "risky",
+            "events": [{"node": "classify", "event_type": "done", "message": "risky"}],
+        }
+        graph = build_graph()
+        result = graph.invoke(state, config={"configurable": {"thread_id": "t7"}})
+        mock_classify.assert_called()
+        mock_approval.assert_called()
+
+    events = [e.get("node") for e in result.get("events", [])]
+    assert "approval" in events
+    assert "clarify" in events
+    assert "finalize" in events
+    assert "tool" not in events
+    assert result["attempt"] == 0
+
+
+
