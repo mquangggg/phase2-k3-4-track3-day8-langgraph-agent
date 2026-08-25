@@ -1,14 +1,12 @@
 """Scenario loading."""
 
-from __future__ import annotations
-
-import json
 from pathlib import Path
 
 from .state import Scenario
 
 
 def load_scenarios(path: str | Path) -> list[Scenario]:
+
     scenarios: list[Scenario] = []
     with Path(path).open("r", encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, start=1):
