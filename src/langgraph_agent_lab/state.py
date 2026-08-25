@@ -61,7 +61,16 @@ class AgentState(TypedDict, total=False):
     approval: dict[str, Any] | None
     final_answer: str | None
 
-    status: Literal["running", "completed", "clarification_required", "dead_letter", "rejected"] | str
+    status: (
+        Literal[
+            "running",
+            "completed",
+            "clarification_required",
+            "dead_letter",
+            "rejected",
+        ]
+        | str
+    )
 
     # Append-only lists with operator.add
     messages: Annotated[list[str], add]
@@ -113,7 +122,17 @@ def initial_state(scenario: Scenario) -> AgentState:
     }
 
 
-
-def make_event(node: str, event_type: str, message: str, **metadata: Any) -> dict[str, Any]:
+def make_event(
+    node: str,
+    event_type: str,
+    message: str,
+    **metadata: object,
+) -> dict[str, Any]:
     """Create a normalized event payload."""
-    return LabEvent(node=node, event_type=event_type, message=message, metadata=metadata).model_dump()
+    payload = LabEvent(
+        node=node,
+        event_type=event_type,
+        message=message,
+        metadata=dict(metadata),
+    )
+    return payload.model_dump()

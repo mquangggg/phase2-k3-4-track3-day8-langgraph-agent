@@ -2,10 +2,10 @@ import json
 from operator import add
 
 from langgraph_agent_lab.scenarios import load_scenarios
-from langgraph_agent_lab.state import AgentState, Route, Scenario, initial_state, make_event
+from langgraph_agent_lab.state import Route, Scenario, initial_state, make_event
 
 
-def test_scenario_validation():
+def test_scenario_validation() -> None:
     scenario = Scenario(id="x", query="hello", expected_route=Route.SIMPLE)
     state = initial_state(scenario)
     assert state["thread_id"] == "thread-x"
@@ -13,7 +13,7 @@ def test_scenario_validation():
     assert state["events"] == []
 
 
-def test_initial_state_has_required_fields():
+def test_initial_state_has_required_fields() -> None:
     """Verify initial_state includes all fields needed by the graph."""
     scenario = Scenario(id="test", query="test query", expected_route=Route.SIMPLE)
     state = initial_state(scenario)
@@ -34,13 +34,13 @@ def test_initial_state_has_required_fields():
         assert key in state, f"Missing key '{key}' in initial_state"
 
 
-def test_state_serialization():
+def test_state_serialization() -> None:
     """Verify that state is serializable to JSON (no un-serializable objects)."""
     scenario = Scenario(id="ser_test", query="testing serialization", expected_route=Route.TOOL)
     state = initial_state(scenario)
     state["events"].append(make_event("intake", "completed", "done"))
     state["tool_results"].append({"status": "ok", "data": 123})
-    
+
     dumped = json.dumps(state)
     loaded = json.loads(dumped)
     assert loaded["ticket_id"] == "ser_test"
@@ -48,7 +48,7 @@ def test_state_serialization():
     assert len(loaded["tool_results"]) == 1
 
 
-def test_state_reducers_append_behavior():
+def test_state_reducers_append_behavior() -> None:
     """Verify that list fields correctly behave with operator.add."""
     base_events = [make_event("intake", "start", "init")]
     new_events = [make_event("classify", "done", "simple")]
@@ -58,8 +58,7 @@ def test_state_reducers_append_behavior():
     assert combined_events[1]["node"] == "classify"
 
 
-def test_load_scenarios():
+def test_load_scenarios() -> None:
     scenarios = load_scenarios("data/sample/scenarios.jsonl")
     assert len(scenarios) >= 6
     assert {item.expected_route for item in scenarios} >= {Route.SIMPLE, Route.TOOL, Route.RISKY}
-

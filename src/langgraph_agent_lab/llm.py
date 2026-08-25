@@ -20,7 +20,9 @@ def get_llm(model: str | None = None, temperature: float = 0.0) -> BaseChatModel
     """Create an LLM client from environment configuration."""
     if os.getenv("DEEPSEEK_API_KEY"):
         try:
-            from langchain_openai import ChatOpenAI
+            from langchain_openai import (  # type: ignore[import-not-found]
+                ChatOpenAI,
+            )
         except ImportError as exc:
             raise RuntimeError("Install: pip install langchain-openai") from exc
 
@@ -56,7 +58,9 @@ def get_llm(model: str | None = None, temperature: float = 0.0) -> BaseChatModel
 
     if os.getenv("OPENAI_API_KEY"):
         try:
-            from langchain_openai import ChatOpenAI
+            from langchain_openai import (  # type: ignore[import-not-found]
+                ChatOpenAI,
+            )
         except ImportError as exc:
             raise RuntimeError("Install: pip install langchain-openai") from exc
         return ChatOpenAI(
