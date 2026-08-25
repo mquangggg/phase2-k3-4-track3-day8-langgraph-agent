@@ -119,8 +119,15 @@ def test_risky_action_and_approval_nodes() -> None:
     risky_update = risky_action_node(state)
     assert "Refund 100$" in risky_update["proposed_action"]
 
+    # Fail-closed default when no approval decision is present
     approval_update = approval_node(state)
-    assert approval_update["approval"]["approved"] is True
+    assert approval_update["approval"]["approved"] is False
+
+    # Explicit approval decision
+    state["approval"] = {"approved": True, "reviewer": "admin"}
+    approval_update_explicit = approval_node(state)
+    assert approval_update_explicit["approval"]["approved"] is True
+
 
 
 def test_retry_or_fallback_node_does_not_increment_attempt() -> None:

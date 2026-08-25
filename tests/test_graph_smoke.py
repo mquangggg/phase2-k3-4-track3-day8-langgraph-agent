@@ -159,7 +159,16 @@ def test_graph_path_risky_approved() -> None:
     scenario = Scenario(id="test_risky", query="Refund $100", expected_route=Route.RISKY)
     state = initial_state(scenario)
 
-    with patch("langgraph_agent_lab.graph.classify_node") as mock_classify:
+    mock_approval = MagicMock()
+    mock_approval.side_effect = lambda s: {
+        "approval": {"approved": True, "comment": "Action approved"},
+        "events": [{"node": "approval", "event_type": "approve", "message": "approved"}],
+    }
+
+    with (
+        patch("langgraph_agent_lab.graph.classify_node") as mock_classify,
+        patch("langgraph_agent_lab.graph.approval_node", mock_approval),
+    ):
         mock_classify.side_effect = lambda s: {
             "route": "risky",
             "risk_level": "high",
@@ -168,12 +177,14 @@ def test_graph_path_risky_approved() -> None:
         graph = build_graph()
         result = graph.invoke(state, config={"configurable": {"thread_id": "t6"}})
         mock_classify.assert_called()
+        mock_approval.assert_called()
 
     events = [e.get("node") for e in result.get("events", [])]
     assert "risky_action" in events
     assert "approval" in events
     assert "tool" in events
     assert result["attempt"] == 1
+
 
 
 def test_graph_path_risky_rejected() -> None:

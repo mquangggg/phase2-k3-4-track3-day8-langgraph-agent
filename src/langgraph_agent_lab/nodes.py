@@ -252,37 +252,43 @@ def risky_action_node(state: AgentState) -> dict[str, Any]:
 
 
 def approval_node(state: AgentState) -> dict[str, Any]:
-    """Human-in-the-loop approval step with mock default."""
+    """Human-in-the-loop approval step with LangGraph interrupt (fail-closed)."""
     proposed_action = state.get("proposed_action", "")
+    ticket_id = state.get("ticket_id", "")
+    risk_level = state.get("risk_level", "high")
 
     if os.getenv("LANGGRAPH_INTERRUPT", "false").lower() == "true":
-        try:
-            from langgraph.types import interrupt
+        from langgraph.types import interrupt
 
-            decision = interrupt({"action": proposed_action, "prompt": "Approve risky action?"})
-            if isinstance(decision, dict):
-                approved = decision.get("approved", True)
-                reviewer = decision.get("reviewer", "human-reviewer")
-                comment = decision.get("comment", "HITL interrupt decision")
-            else:
-                approved = bool(decision)
-                reviewer = "human-reviewer"
-                comment = "HITL interrupt decision"
-        except Exception:
-            approved = True
-            reviewer = "mock-reviewer"
-            comment = "Default approval fallback"
+        decision = interrupt({
+            "type": "approval_required",
+            "ticket_id": ticket_id,
+            "proposed_action": proposed_action,
+            "risk_level": risk_level,
+            "message": f"Approve risky action: {proposed_action}?",
+        })
+        if isinstance(decision, dict):
+            approved = bool(decision.get("approved", False))
+            reviewer = str(decision.get("reviewer", "human-reviewer"))
+            comment = str(decision.get("comment", ""))
+        elif isinstance(decision, bool):
+            approved = decision
+            reviewer = "human-reviewer"
+            comment = ""
+        else:
+            approved = False
+            reviewer = "system"
+            comment = "Invalid decision payload"
     else:
-        # Respect pre-configured approval decision if scenario provided one
         pre_approval = state.get("approval")
         if isinstance(pre_approval, dict) and "approved" in pre_approval:
-            approved = pre_approval["approved"]
-            reviewer = pre_approval.get("reviewer", "scenario-reviewer")
-            comment = pre_approval.get("comment", "Scenario defined approval")
+            approved = bool(pre_approval["approved"])
+            reviewer = str(pre_approval.get("reviewer", "scenario-reviewer"))
+            comment = str(pre_approval.get("comment", "Scenario defined approval"))
         else:
-            approved = True
-            reviewer = "mock-reviewer"
-            comment = "Auto-approved for lab scenario"
+            approved = False
+            reviewer = "system"
+            comment = "Approval required"
 
     approval_dict = {
         "approved": approved,
@@ -294,6 +300,8 @@ def approval_node(state: AgentState) -> dict[str, Any]:
         "approval": approval_dict,
         "events": [make_event("approval", "decided", f"Approved: {approved}", **approval_dict)],
     }
+
+
 
 
 def retry_or_fallback_node(state: AgentState) -> dict[str, Any]:
