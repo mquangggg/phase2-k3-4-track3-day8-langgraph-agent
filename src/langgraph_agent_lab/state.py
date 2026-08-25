@@ -6,9 +6,9 @@ Students should extend the schema only when needed. Keep state lean and serializ
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Any, TypedDict
-
 from operator import add
+from typing import Annotated, Any, Literal, TypedDict
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -39,25 +39,33 @@ class ApprovalDecision(BaseModel):
 
 
 class AgentState(TypedDict, total=False):
-    """LangGraph state.
+    """LangGraph state with typed schema and append-only reducers."""
 
-    TODO(student): decide which fields should be append-only and which should be overwritten.
-    The current annotations give a safe starting point for auditability.
-    """
-
+    ticket_id: str
+    user_input: str
     thread_id: str
     scenario_id: str
     query: str
-    route: str
+
+    route: Literal["risky", "tool", "missing_info", "error", "simple"] | str
+    classification_reason: str
     risk_level: str
+
     attempt: int
     max_attempts: int
+
+    evaluation_result: Literal["success", "needs_retry"] | str | None
+    pending_question: str | None
+    proposed_action: str | None
+
+    approval: dict[str, Any] | None
     final_answer: str | None
-    # TODO(student): you will need additional fields for clarification, risky actions,
-    # approval decisions, and retry-loop gating. Add them as you implement nodes.
-    # Hint: check what your nodes return and what your routing functions read.
+
+    status: Literal["running", "completed", "clarification_required", "dead_letter", "rejected"] | str
+
+    # Append-only lists with operator.add
     messages: Annotated[list[str], add]
-    tool_results: Annotated[list[str], add]
+    tool_results: Annotated[list[Any], add]
     errors: Annotated[list[str], add]
     events: Annotated[list[dict[str, Any]], add]
 
@@ -82,19 +90,28 @@ class Scenario(BaseModel):
 def initial_state(scenario: Scenario) -> AgentState:
     """Create a serializable initial state for one scenario."""
     return {
+        "ticket_id": scenario.id,
+        "user_input": scenario.query,
         "thread_id": f"thread-{scenario.id}",
         "scenario_id": scenario.id,
         "query": scenario.query,
         "route": "",
+        "classification_reason": "",
         "risk_level": "unknown",
         "attempt": 0,
         "max_attempts": scenario.max_attempts,
+        "evaluation_result": None,
+        "pending_question": None,
+        "proposed_action": None,
+        "approval": None,
         "final_answer": None,
+        "status": "running",
         "messages": [],
         "tool_results": [],
         "errors": [],
         "events": [],
     }
+
 
 
 def make_event(node: str, event_type: str, message: str, **metadata: Any) -> dict[str, Any]:
